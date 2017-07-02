@@ -1,11 +1,13 @@
 #!/bin/sh
 
+
 if (( $EUID != 0 )); then
 
     echo "macOS Install Drive Maker needs to be run as superuser"
     sudo "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
     exit
 fi
+
 
 function header
 {
@@ -16,17 +18,17 @@ function header
 	echo "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
 	echo
 
-	if [ "$setInstaller" != "" ]; then
-		echo "> Selected $setInstaller"
+	if [ "$Installer" != "" ]; then
+		echo "> Selected $Installer"
 	fi
-	if [ "$setDisk" != "" ]; then
-		echo "> Selected $setDisk"
+	if [ "$Disk" != "" ]; then
+		echo "> Selected $Disk"
 	fi
 	if [ "$setMessageFormat" != "" ]; then
-		echo "> Step 1: Format $setDisk"
+		echo "> Step 1: Format $Disk"
 	fi
 	if [ "$setMessageMountESD" != "" ]; then
-		echo "> Step 2: Mount $setInstallESD"
+		echo "> Step 2: Mount $InstallESD"
 	fi
 	if [ "$setMessageCopyBaseSystem" != "" ]; then
 		echo "> Step 3: Copy Base System to Disk"
@@ -40,25 +42,14 @@ function header
 	if [ "$setMessageDone" != "" ]; then
 		echo "> Done!"
 	fi
+	if [ "$setAbort" != "" ]; then
+		echo "> Error: Task aborted"
+	fi
 
 	echo
 	echo "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
 }
 
-function unmountInstallESD
-{
-
-	volume=$(diskutil list | grep Mac\ OS\ X\ Install\ ESD | awk '{print $10}' | cut -f 2 -d "k" | cut -f 1 -d "s")
-	if [ "$volume" != "" ]; then
-		diskutil unmountDisk force "disk$volume"
-	fi
-
-	volume=$(diskutil list | grep OS\ X\ Install\ ESD | awk '{print $9}' | cut -f 2 -d "k" | cut -f 1 -d "s")
-	if [ "$volume" != "" ]; then
-		diskutil unmountDisk force "disk$volume"
-	fi
-
-}
 
 while [ 1 ]; do
 
@@ -101,17 +92,7 @@ while [ 1 ]; do
 
 	elif [[ $i == 1 ]]; then
 
-		setInstaller="$(echo ${installer[0]} | cut -f 1 -d ".")"
-
-		# early version workaround
-		if [[ "${installer[0]}" == "Install OS X Snow Leopard.app" ]] || [[ "${installer[0]}" == "Install OS X Lion.app" ]] || [[ "${installer[0]}" == "Install OS X Mountain Lion.app" ]]; then
-			setBaseSystem="Mac OS X Base System"
-			setInstallESD="Mac OS X Install ESD"
-		else
-			setBaseSystem="OS X Base System"
-			setInstallESD="OS X Install ESD"
-		fi
-
+		Installer="$(echo ${installer[0]} | rev | cut -c 5- | rev)"
 		break
 
 	else
@@ -121,17 +102,7 @@ while [ 1 ]; do
 
 			if [[ ${#installer[@]}+1 > $input ]] && [[ $input > 0 ]]; then
 
-				setInstaller="$(echo ${installer[$input-1]} | cut -f 1 -d ".")"
-
-				# early version workaround
-				if [[ "${installer[$input-1]}" == "Install OS X Snow Leopard.app" ]] || [[ "${installer[$input-1]}" == "Install OS X Lion.app" ]] || [[ "${installer[$input-1]}" == "Install OS X Mountain Lion.app" ]]; then
-					setBaseSystem="Mac OS X Base System"
-					setInstallESD="Mac OS X Install ESD"
-				else
-					setBaseSystem="OS X Base System"
-					setInstallESD="OS X Install ESD"
-				fi
-
+				Installer="$(echo ${installer[$input-1]} | rev | cut -c 5- | rev)"
 				break
 
 			fi
@@ -141,6 +112,16 @@ while [ 1 ]; do
 	fi
 
 done
+
+
+
+while [ "$(ls "/Volumes/" | grep "ESD")" != "" ]; do
+
+	image=$(diskutil list | grep "ESD" | rev | awk '{print $1}' | rev)
+	hdiutil detach "/dev/$image"
+
+done
+
 
 while [ 1 ]; do
 
@@ -179,7 +160,7 @@ while [ 1 ]; do
 		if [ -b "/dev/disk$input" ]; then
 
 			echo "/dev/disk$input"
-			setDisk="disk$input"
+			Disk="disk$input"
 			break
 
 		fi
@@ -188,48 +169,119 @@ while [ 1 ]; do
 
 done
 
+
 setMessageFormat="true"
 header
 echo "Ready to make an Install Disk"
-echo "This will delete all data on $setDisk and create an Install Disk"
+echo "This will delete all data on $Disk and create an Install Disk"
 echo
 
 read -p "Enter START to continue: " input
+
 if [[ $input != "START" ]]; then
-
+	setAbort="true"
+	header
+	echo "Wrong input"
 	exit
-
 fi
 
 
-diskutil eraseDisk JHFS+ "$setInstaller" "$setDisk"
+diskutil eraseDisk JHFS+ "$Installer" "$Disk"
+
+if [ "$(ls "/Volumes/" | grep "$Installer")" == "" ]; then
+	setAbort="true"
+	header
+	echo "Formatting failed"
+	exit
+fi
+
 
 setMessageMountESD="true"
 header
-hdiutil attach "/Applications/$setInstaller.app/Contents/SharedSupport/InstallESD.dmg"
+hdiutil attach "/Applications/$Installer.app/Contents/SharedSupport/$(ls "/Applications/$Installer.app/Contents/SharedSupport/" | grep "ESD")"
+InstallESD="$(ls "/Volumes/" | grep "ESD")"
+
+if [ "$(ls "/Volumes/" | grep "$InstallESD")" == "" ]; then
+	setAbort="true"
+	header
+	echo "Mounting failed"
+	exit
+fi
+
 
 setMessageCopyBaseSystem="true"
 header
 echo "Copying. This might take a while..."
-asr restore --verbose --source "/Volumes/$setInstallESD/BaseSystem.dmg" --target "/Volumes/$setInstaller" --erase --noprompt
-diskutil rename "$setBaseSystem" "$setInstaller"
-rsync --progress "/Volumes/$setInstallESD/BaseSystem.chunklist" "/Volumes/$setInstaller"
-rsync --progress "/Volumes/$setInstallESD/BaseSystem.dmg" "/Volumes/$setInstaller"
+
+if [[ "$(ls "/Applications/$Installer.app/Contents/SharedSupport/" | grep "Base" | grep "dmg")" != "" ]]; then
+	asr restore --verbose --source "/Applications/$Installer.app/Contents/SharedSupport/$(ls "/Applications/$Installer.app/Contents/SharedSupport/" | grep "Base" | grep "dmg")" --target "/Volumes/$Installer" --erase --noprompt
+	diskutil rename "$(ls "/Volumes/" | grep "Base")" "$Installer"
+	rsync --progress "/Applications/$Installer.app/Contents/SharedSupport/$(ls "/Applications/$Installer.app/Contents/SharedSupport/" | grep "Base" | grep "chunklist")" "/Volumes/$Installer"
+	rsync --progress "/Applications/$Installer.app/Contents/SharedSupport/$(ls "/Applications/$Installer.app/Contents/SharedSupport/" | grep "Base" | grep "dmg")" "/Volumes/$Installer"
+fi
+
+if [[ "$(ls "/Volumes/$InstallESD/" | grep "Base" | grep "dmg")" != "" ]]; then
+	asr restore --verbose --source "/Volumes/$InstallESD/$(ls "/Volumes/$InstallESD/" | grep "Base" | grep "dmg")" --target "/Volumes/$Installer" --erase --noprompt
+	diskutil rename "$(ls "/Volumes/" | grep "Base")" "$Installer"
+	rsync --progress "/Volumes/$InstallESD/$(ls "/Volumes/$InstallESD/" | grep "Base" | grep "chunklist")" "/Volumes/$Installer"
+	rsync --progress "/Volumes/$InstallESD/$(ls "/Volumes/$InstallESD/" | grep "Base" | grep "dmg")" "/Volumes/$Installer"
+fi
+
+if [ "$(ls "/Volumes/$Installer/" | grep "Install")" == "" ]; then
+	setAbort="true"
+	header
+	echo "Base DMG could not get restored"
+	exit
+fi
+
+if [ "$(ls "/Volumes/$Installer/" | grep "$Base" | grep "chunklist")" == "" ]; then
+	setAbort="true"
+	header
+	echo "Base Chunklist could not get copied"
+	exit
+fi
+
+if [ "$(ls "/Volumes/$Installer/" | grep "$Base" | grep "dmg")" == "" ]; then
+	setAbort="true"
+	header
+	echo "Base DMG could not get copied"
+	exit
+fi
+
 
 setMessageCopyPackages="true"
 header
-rm -rf "/Volumes/$setInstaller/System/Installation/Packages"
+rm -rf "/Volumes/$Installer/System/Installation/Packages"
 echo "Copying packages. This might take a while..."
-rsync -r --progress "/Volumes/$setInstallESD/Packages/" "/Volumes/$setInstaller/System/Installation/Packages/"
+rsync -r --progress "/Volumes/$InstallESD/Packages/" "/Volumes/$Installer/System/Installation/Packages/"
+
+if [ "$(ls "/Volumes/$Installer/System/Installation/Packages/")" == "" ]; then
+	setAbort="true"
+	header
+	echo "Copying packages failed"
+	exit
+fi
+
 
 setMessageCleanup="true"
 header
-chflags -hf hidden "/Volumes/$setInstaller/"*
-chflags -f nohidden "/Volumes/$setInstaller/$setInstaller.app"
-rm -rf "/Volumes/$setInstaller/.fseventsd"
-rm -rf "/Volumes/$setInstaller/.Spotlight-V100"
-rm -rf "/Volumes/$setInstaller/.vol"
-unmountInstallESD
+chflags -hf hidden "/Volumes/$Installer/"*
+chflags -f nohidden "/Volumes/$Installer/$Installer.app"
+rm -rf "/Volumes/$Installer/.fseventsd"
+rm -rf "/Volumes/$Installer/.Spotlight-V100"
+rm -rf "/Volumes/$Installer/.vol"
+
+while [ "$(ls "/Volumes/" | grep "ESD")" != "" ]; do
+
+	image=$(diskutil list | grep "ESD" | rev | awk '{print $1}' | rev)
+	hdiutil detach "/dev/$image"
+
+done
+
+disk=$(diskutil list | grep "$Installer" | rev | awk '{print $1}' | rev)
+diskutil unmount "/dev/$disk";
+diskutil mount "/dev/$disk";
+
 
 setMessageDone="true"
 header
